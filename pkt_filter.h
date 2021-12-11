@@ -3,15 +3,21 @@
 #include <pcap.h>
 #include <netinet/in.h>
 
-typedef struct ethernet {
-	u_char preamble[7];
+#define __ntohs(pkt, field) \
+	pkt->field = ntohs(pkt->field)
+
+#define SIZE_ETHERNET 14
 #define MAC_ADDR_LEN 6
+typedef struct ethernet {
 	u_char dst_mac[MAC_ADDR_LEN];
 	u_char src_mac[MAC_ADDR_LEN];
 	u_short type;
-	u_short crc;
 } Ethernet;
-#define SIZE_ETHERNET 14
+#define IPv4 0x0800
+#define eth_ntohs(eth){ \
+	__ntohs(eth, type); \
+}
+void eth_info_print(Ethernet *eth);
 
 typedef struct ip {
 	u_char vhl; 
@@ -35,11 +41,12 @@ typedef struct ip {
 #define get_ip_dont_frag_bit(ip) ((((ip)->offset) >> 13) & DF)
 #define get_ip_more_frag_bit(ip) ((((ip)->offset) >> 13) & MF)
 #define ip_ntohs(ip) { \
-	ip->len = ntohs(ip->len); \
-	ip->id = ntohs(ip->id); \
-	ip->offset = ntohs(ip->offset); \
-	ip->chsum = ntohs(ip->chsum); \
+	__ntohs(ip, len); \
+	__ntohs(ip, id); \
+	__ntohs(ip, offset); \
+	__ntohs(ip, chsum); \
 }
+void ip_handler(IP *ip);
 
 typedef struct tcp {
 	u_short src_port;
@@ -66,6 +73,14 @@ typedef struct tcp {
 #define get_tcp_rst_bit(tcp) (((tcp)->flags) & RST)
 #define get_tcp_syn_bit(tcp) (((tcp)->flags) & SYN)
 #define get_tcp_fin_bit(tcp) (((tcp)->flags) & FIN)
+#define tcp_ntohs(tcp){ \
+	__ntohs(tcp, src_port); \
+	__ntohs(tcp, dst_port); \
+	__ntohs(tcp, win); \
+	__ntohs(tcp, chsum); \
+	__ntohs(tcp, urg_ptr); \
+}
+void tcp_handler(TCP *tcp);
 
 typedef struct udp {
 	u_short src_port;
@@ -75,11 +90,12 @@ typedef struct udp {
 } UDP;
 #define SIZE_UDP 8
 #define udp_ntohs(udp) { \
-	udp->src_port = ntohs(udp->src_port); \
-	udp->dst_port = ntohs(udp->dst_port); \
-	udp->len = ntohs(udp->len); \
-	udp->chsum = ntohs(udp->chsum); \
+	__ntohs(udp, src_port); \
+	__ntohs(udp, dst_port); \
+	__ntohs(udp, len); \
+	__ntohs(udp, chsum); \
 }
+void udp_handler(UDP *udp);
 
 typedef struct icmp {
 

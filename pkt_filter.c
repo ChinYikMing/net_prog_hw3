@@ -1,9 +1,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+/*
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+*/
 #include <arpa/inet.h>
 #include "pkt_filter.h"
 
@@ -90,12 +92,13 @@ void got_packet(u_char *args, const struct pcap_pkthdr *header, const u_char *pa
 	TCP *tcp;
 	UDP *udp;
 	u_char *payload;
-
 	u_int size_ip;
-	u_int size_tcp;
-	u_int size_udp;
 
 	eth = (Ethernet *) packet;
+	eth_ntohs(eth);
+
+	// show MAC address (cmd("ip link") to check your interface MAC address) and type
+	eth_info_print(eth);
 
 	ip = (IP *) (packet + SIZE_ETHERNET);
 	size_ip = get_ip_hdr_len(ip) << 2; // multiple 4 to get the total bytes since it is 4-byte words
@@ -103,57 +106,84 @@ void got_packet(u_char *args, const struct pcap_pkthdr *header, const u_char *pa
 		fprintf(stderr, "Invalid IP header length: %u bytes\n", size_ip);
 		return;
 	}
-
-	// resolve byte ordering
 	ip_ntohs(ip);
 
-	/*
-	printf("ip len(bin): %x\n", ip->len);
-	printf("ip len: %u\n", ip->len);
-	printf("ip id: %u\n", ip->id);
-	printf("=============================\n");
-	*/
+	// ip info
+	char src_buf[INET_ADDRSTRLEN];
+	char dst_buf[INET_ADDRSTRLEN];
+	const char *src_ip;
+	const char *dst_ip;
+	src_ip = inet_ntop(AF_INET, (void *) &ip->src_ip, src_buf, INET_ADDRSTRLEN);
+	dst_ip = inet_ntop(AF_INET, (void *) &ip->dst_ip, dst_buf, INET_ADDRSTRLEN);
+	printf("IP (ttl: %u, proto: %u, src_ip: %s, dst_ip: %s, len: %u)\n", 
+			ip->ttl, ip->proto, src_ip, dst_ip, ip->len);
 
-	// ttl no problem
-	//printf("ip ttl: %u\n", ip->ttl);
-	
-	// protocol no problem
-	//printf("ip ttl: %u\n", ip->proto);
-	
-	// ip size no problem
-	//printf("ip size: %u\n", size_ip);
+	if(IPPROTO_UDP == ip->proto)
+		udp_handler((UDP *) (packet + SIZE_ETHERNET + size_ip));
+	else if(IPPROTO_TCP == ip->proto)
+		tcp_handler((TCP *) (packet + SIZE_ETHERNET + size_ip));
 
-	/* ip no problem
-	char buf[INET_ADDRSTRLEN];
-	const char *ip_src;
-	const char *ip_dst;
-	ip_src = inet_ntop(AF_INET, (void *) &ip->src_ip, buf, INET_ADDRSTRLEN);
-	printf("ip src: %s\n", ip_src);
-	ip_dst = inet_ntop(AF_INET, (void *) &ip->dst_ip, buf, INET_ADDRSTRLEN);
-	printf("ip dest: %s\n", ip_dst);
-	*/
+	/* statistics of packets */
+	return;
+}
 
-	udp = (UDP *) (packet + SIZE_ETHERNET + size_ip);
-	udp_ntohs(udp);
+void tcp_handler(TCP *tcp){
+	tcp_ntohs(tcp);
+	u_int size_tcp;
 
-	printf("src port: %u\n", udp->src_port);
-	printf("dest port: %u\n", udp->dst_port);
-	printf("payload len: %u\n", udp->len);
-	printf("=============================\n");
-
-	/*
 	size_tcp = get_tcp_offset(tcp) << 2; // multiple 4 to get the total bytes since it is 4-byte words
 	if(size_tcp < 20){
 		fprintf(stderr, "Invalid TCP header length: %u bytes\n", size_tcp);
 		return;
 	}
-	*/
 
-	/*
-	char buf[1024];
-	payload = (u_char *) (packet + SIZE_ETHERNET + size_ip + size_tcp);
-	snprintf(buf, 100, "%s", payload);
-	printf("buf: %s\n", buf);
-	*/
+	printf("TCP (src port: %u, ", tcp->src_port);
+	printf("dest port: %u)\n", tcp->dst_port);
+	printf("=============================\n");
+}
+
+void udp_handler(UDP *udp){
+	udp_ntohs(udp);
+
+	printf("UDP (src port: %u, ", udp->src_port);
+	printf("dest port: %u)\n", udp->dst_port);
+	printf("=============================\n");
+}
+
+void ip_handler(IP *ip){
+
+}
+
+void eth_info_print(Ethernet *eth){
+	u_char *ptr = eth->src_mac;
+	u_char tmp;
+	printf("ETHERNET (src_MAC: ");
+	for(size_t i = 0; i < MAC_ADDR_LEN; ++i){
+		memcpy(&tmp, ptr, sizeof(u_char));
+		if(tmp < 0xf) // we need to fill zero before the hex
+			printf("0");
+		if(MAC_ADDR_LEN - 1 == i){
+			printf("%X", *ptr);
+			break;
+		}
+		printf("%X.", *ptr);
+		ptr++;
+	}
+	printf(", dst_MAC: ");
+	ptr = eth->dst_mac;
+	for(size_t i = 0; i < MAC_ADDR_LEN; ++i){
+		memcpy(&tmp, ptr, sizeof(u_char));
+		if(tmp < 0xf) // we need to fill zero before the hex
+			printf("0");
+		if(MAC_ADDR_LEN - 1 == i){
+			printf("%X ", *ptr);
+			break;
+		}
+		printf("%X.", *ptr);
+		ptr++;
+	}
+
+	if(eth->type & IPv4)
+		printf("type: IPv4)\n");
 	return;
 }
