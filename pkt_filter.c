@@ -20,7 +20,7 @@ void got_packet(u_char *args, const struct pcap_pkthdr *header, const u_char *pa
 
 static void usage(char *prog_name){
     fprintf(stderr, " Usage:\n");
-    fprintf(stderr, " %s [-i interface | -f pcap_filename] -e \"expression\"\n", prog_name);
+    fprintf(stderr, " %s < -i interface | -f pcap_filename > [-e \"expression\", default will sniff all packets]\n", prog_name);
     fprintf(stderr, " Supported expression:\n");
     fprintf(stderr, "     dst "BHRED"host"reset", dst host IP(IPv4 and IPv6)\n");
     fprintf(stderr, "     src "BHRED"host"reset", src host IP(IPv4 and IPv6)\n");
@@ -41,16 +41,15 @@ int main(int argc, char *argv[]){
     if(argc != 5)
         usage(argv[0]);
 
-    int opt, cmp;
+    int opt;
     char dev[MAX_DEV_SIZE];
-    char expr[MAX_EXPR_SIZE];
+    char expr[MAX_EXPR_SIZE] = "";     // default empty expression means all packets
     _Bool has_file_opt = false;
     _Bool has_if_opt = false;
     while((opt = getopt(argc, argv, "hf:i:e:")) != -1){
 	switch(opt){
 		case 'h':
 			usage(argv[0]);
-			return 0;
 
 		case 'f':
 			if(has_if_opt)
@@ -71,12 +70,11 @@ int main(int argc, char *argv[]){
 			break;
 
 		default: // invalid option => exit the program
-			err_exit("invalid option applied, enter '-h' option to check the available options");
-
+			err_exit("use '-h' option to check all available options");
 	}
     }
 
-    pcap_dev_handler(dev, expr, (has_if_opt ? DEV_IF : DEV_FILE));
+    pcap_dev_handler(dev, expr, has_if_opt ? DEV_IF : DEV_FILE);
 }
 
 // simply ignore first argument since it is NULL
@@ -227,7 +225,6 @@ void pcap_dev_handler(char *dev, char *expr, DevType devtype){
 		}
 		dev_ptr = dev_ptr->next;
 	}
-	pcap_close(handle);
 	err_exit("interface not found");
     }
 sniff:
