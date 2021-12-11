@@ -109,4 +109,10 @@ typedef struct dns {
 
 } DNS;
 
+typedef enum dev_type {
+	DEV_FILE,
+	DEV_IF   // interface
+} DevType;
+void pcap_dev_handler(char *dev, char *expr, DevType devtype);
+
 #endif

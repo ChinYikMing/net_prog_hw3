@@ -1,15 +1,15 @@
 #include <stdio.h>
+#include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
-/*
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-*/
+#include <unistd.h>
 #include <arpa/inet.h>
 #include "pkt_filter.h"
+#include "basis.h"
 
 #define LOOP_FOREVER -1
+#define MAX_DEV_SIZE 512
+#define MAX_EXPR_SIZE 512
 
 #define err_exit(msg){ \
     fprintf(stderr, "%s\n", msg); \
@@ -19,70 +19,64 @@
 void got_packet(u_char *args, const struct pcap_pkthdr *header, const u_char *packet);
 
 static void usage(char *prog_name){
-    printf("%s <desired interface>\n", prog_name);
-    exit(1);
+    fprintf(stderr, " Usage:\n");
+    fprintf(stderr, " %s [-i interface | -f pcap_filename] -e \"expression\"\n", prog_name);
+    fprintf(stderr, " Supported expression:\n");
+    fprintf(stderr, "     dst "BHRED"host"reset", dst host IP(IPv4 and IPv6)\n");
+    fprintf(stderr, "     src "BHRED"host"reset", src host IP(IPv4 and IPv6)\n");
+    fprintf(stderr, "     host "BHRED"host"reset", IP(IPv4 and IPv6), no matter src or dst host\n");
+    fprintf(stderr, "     dst port "BHRED"port"reset", dest host port\n");
+    fprintf(stderr, "     src port "BHRED"port"reset", src host port\n");
+    fprintf(stderr, "     port "BHRED"port"reset", no matter src or dst port\n");
+    fprintf(stderr, "     less "BHRED"length"reset", packet with less than or equal length\n");
+    fprintf(stderr, "     greater "BHRED"length"reset", packet with greater than or equal length\n");
+    fprintf(stderr, " Example of expression: \"host 140.123.26.27 && port 80\"\n");
+    fprintf(stderr, " A lot more available expression in "
+		    "\"https://www.tcpdump.org/manpages/pcap-filter.7.html\"\n");
+
+    err_exit(" Please try again!");
 }
 
 int main(int argc, char *argv[]){
-    if(argc != 2)
+    if(argc != 5)
         usage(argv[0]);
 
-    char *dev_desired = argv[1];
-    char err_buf[PCAP_ERRBUF_SIZE];
-    int ret;
+    int opt, cmp;
+    char dev[MAX_DEV_SIZE];
+    char expr[MAX_EXPR_SIZE];
+    _Bool has_file_opt = false;
+    _Bool has_if_opt = false;
+    while((opt = getopt(argc, argv, "hf:i:e:")) != -1){
+	switch(opt){
+		case 'h':
+			usage(argv[0]);
+			return 0;
 
-    pcap_if_t *dev_ptr;
-    ret = pcap_findalldevs(&dev_ptr, err_buf);
-    if(ret == PCAP_ERROR)
-        err_exit(err_buf);
+		case 'f':
+			if(has_if_opt)
+				err_exit("file and interface option are mutual exclusion");
+			has_file_opt = true;
+			strcpy(dev, optarg);
+			break;
 
-    while(dev_ptr){
-        if(dev_ptr->flags & PCAP_IF_UP && strcmp(dev_ptr->name, dev_desired) == 0){
-            bpf_u_int32 mask;
-            bpf_u_int32 net;
+		case 'i':
+			if(has_file_opt)
+				err_exit("file and interface option are mutual exclusion");
+			has_if_opt = true;
+			strcpy(dev, optarg);
+			break;
 
-            ret = pcap_lookupnet(dev_desired, &net, &mask, err_buf);
-            if(ret == -1){
-                fprintf(stderr, "Can't get netmask for device %s\n", dev_desired);
-                net = 0;
-                mask = 0;
-            }
+		case 'e':
+			strcpy(expr, optarg);
+			break;
 
-            pcap_t *handle;
-            handle = pcap_open_live(dev_desired, BUFSIZ, 1, 1000, err_buf);
-            if(!handle)
-                err_exit(err_buf);
+		default: // invalid option => exit the program
+			err_exit("invalid option applied, enter '-h' option to check the available options");
 
-            struct bpf_program filter;
-            char expr[] = "port 53";
-            ret = pcap_compile(handle, &filter, expr, 0, net);
-            if(ret == -1){
-		pcap_close(handle);
-                err_exit(pcap_geterr(handle));
-	    }
-
-            ret = pcap_setfilter(handle, &filter);
-            if(ret == -1){
-		pcap_close(handle);
-                err_exit(pcap_geterr(handle));
-	    }
-
-	    // sniff packet
-	    ret = pcap_loop(handle, LOOP_FOREVER, got_packet, NULL);
-	    if(ret == -1){
-		pcap_close(handle);
-                err_exit(pcap_geterr(handle));
-	    }
-
-            pcap_close(handle);
-            exit(0);
-        }
-        dev_ptr = dev_ptr->next;
+	}
     }
 
-    // desired interface not found
-    fprintf(stderr, "%s interface not found!\n", dev_desired);
-    exit(1);
+    pcap_dev_handler(dev, expr, (has_if_opt ? DEV_IF : DEV_FILE));
 }
 
 // simply ignore first argument since it is NULL
@@ -186,4 +180,65 @@ void eth_info_print(Ethernet *eth){
 	if(eth->type & IPv4)
 		printf("type: IPv4)\n");
 	return;
+}
+
+void pcap_dev_handler(char *dev, char *expr, DevType devtype){
+    char err_buf[PCAP_ERRBUF_SIZE];
+    int ret;
+    pcap_t *handle;
+
+    if(DEV_FILE == devtype){
+	handle = pcap_open_offline(dev, err_buf);
+	if(!handle)
+		err_exit(err_buf);
+	goto sniff;
+    } else if(DEV_IF == devtype){
+    	pcap_if_t *dev_ptr;
+    	ret = pcap_findalldevs(&dev_ptr, err_buf);
+    	if(ret == PCAP_ERROR)
+		err_exit(err_buf);
+
+	while(dev_ptr){
+		if(dev_ptr->flags & PCAP_IF_UP && strcmp(dev_ptr->name, dev) == 0){
+		    bpf_u_int32 mask;
+		    bpf_u_int32 net;
+
+		    ret = pcap_lookupnet(dev, &net, &mask, err_buf);
+		    if(ret == -1){
+			fprintf(stderr, "Can't get netmask for device %s\n", dev);
+			net = 0;
+			mask = 0;
+		    }
+
+		    handle = pcap_open_live(dev, BUFSIZ, 1, 1000, err_buf);
+		    if(!handle)
+			err_exit(err_buf);
+
+		    struct bpf_program filter;
+		    ret = pcap_compile(handle, &filter, expr, 0, net);
+		    if(ret == -1)
+			goto err;
+
+		    ret = pcap_setfilter(handle, &filter);
+		    if(ret == -1)
+			goto err;
+
+		    goto sniff;
+		}
+		dev_ptr = dev_ptr->next;
+	}
+	pcap_close(handle);
+	err_exit("interface not found");
+    }
+sniff:
+    ret = pcap_loop(handle, LOOP_FOREVER, got_packet, NULL);
+    if(ret == -1)
+	goto err;
+
+    pcap_close(handle);
+    exit(0);
+
+err:
+    pcap_close(handle);
+    err_exit(pcap_geterr(handle));
 }
