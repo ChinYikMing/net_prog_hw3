@@ -97,22 +97,31 @@ typedef struct udp {
 }
 void udp_handler(UDP *udp);
 
-typedef struct icmp {
-
-} ICMP;
-
-typedef struct arp {
-
-} ARP;
-
 typedef struct dns {
-
+	u_short id;
+	u_short flags; // for QR, Opcode, AA, TC, RD, RA, Z, RCODE
+	u_short qd_cnt;
+	u_short an_cnt;
+	u_short ns_cnt;
+	u_short ar_cnt;
 } DNS;
-
-typedef enum dev_type {
-	DEV_FILE,
-	DEV_IF   // interface
-} DevType;
-void pcap_dev_handler(char *dev, char *expr, DevType devtype);
+#define get_dns_qr_bit(dns) ((dns->flags) >> 15)
+#define get_dns_opcode(dns) (((dns->flags) >> 11) & 0xf)
+#define get_dns_aa_bit(dns) (((dns->flags) >> 10) & 0x1)
+#define get_dns_tc_bit(dns) (((dns->flags) >> 9) & 0x1)
+#define get_dns_rd_bit(dns) (((dns->flags) >> 8) & 0x1)
+#define get_dns_ra_bit(dns) (((dns->flags) >> 7) & 0x1)
+#define get_dns_z(dns)      (((dns->flags) >> 4) & 0x7)
+#define get_dns_rcode(dns)  ((dns->flags) & 0xf)
+#define dns_ntohs(dns) { \
+	__ntohs(dns, id); \
+	__ntohs(dns, flags); \
+	__ntohs(dns, qd_cnt); \
+	__ntohs(dns, an_cnt); \
+	__ntohs(dns, ns_cnt); \
+	__ntohs(dns, ar_cnt); \
+}
+void dns_handler(DNS *dns);
+void dns_label2str(u_char **label, u_char *start);
 
 #endif

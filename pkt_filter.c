@@ -1,6 +1,8 @@
 #include <stdio.h>
+#include <assert.h>
 #include <stdbool.h>
-#include <stdlib.h>
+#include <stdlib.h> 
+#include <pthread.h>
 #include <string.h>
 #include <unistd.h>
 #include <arpa/inet.h>
@@ -10,17 +12,54 @@
 #define LOOP_FOREVER -1
 #define MAX_DEV_SIZE 512
 #define MAX_EXPR_SIZE 512
+#define MAX_WRITE_FILENAME 512
+#define MAX_SNAPLEN 8192
+
+// options flag
+#define OP_FILE  0x1
+#define OP_IF    0x2
+#define OP_WRITE 0x4
 
 #define err_exit(msg){ \
     fprintf(stderr, "%s\n", msg); \
     exit(1); \
 }
 
-void got_packet(u_char *args, const struct pcap_pkthdr *header, const u_char *packet);
+// DNS RR type(RFC 1035)
+static const char *dns_types[18] = {
+	"UNKN",  /* Unsupported / Invalid type */
+	"A",     /* Host Address */
+	"NS",    /* Authorative Name Server */
+	"MD",    /* Mail Destination (Obsolete) */
+	"MF",    /* Mail Forwarder   (Obsolete) */
+	"CNAME", /* Canonical Name */
+	"SOA",   /* Start of Authority */
+	"MB",    /* Mailbox (Experimental) */
+	"MG",    /* Mail Group Member (Experimental) */
+	"MR",    /* Mail Rename (Experimental) */
+	"NULL",  /* Null Resource Record (Experimental) */
+	"WKS",   /* Well Known Service */
+	"PTR",   /* Domain Name Pointer */
+	"HINFO", /* Host Information */
+	"MINFO", /* Mailbox / Mail List Information */
+	"MX",    /* Mail Exchange */
+	"TXT",   /* Text Strings */
+	"AAAA"   /* IPv6 Host Address (RFC 1886) */
+};
+size_t packet_cnt = 0;
+
+void pcap_dev_handler(const char *dev, const char *expr, int op_flags);
+void pcap_write_handler(const char *dev, const char *write_filename);
+
+void read_packet(u_char *args, const struct pcap_pkthdr *header, const u_char *packet);
+void write_packet(u_char *handle, const struct pcap_pkthdr *header, const u_char *packet);
+
+pcap_t *get_handle_by_dev(const char *dev, bpf_u_int32 *net, bpf_u_int32 *mask); // caller is responsible to close the handle
 
 static void usage(char *prog_name){
     fprintf(stderr, " Usage:\n");
-    fprintf(stderr, " %s < -i interface | -f pcap_filename > [-e \"expression\", default will sniff all packets]\n", prog_name);
+    fprintf(stderr, " %s < -i "BHRED"interface"reset" [-w "BHRED"saved_filename"reset"] | -f "BHRED"pcap_filename"reset" > "
+		    "[-e \""BHRED"expression"reset"\", default will sniff all packets]\n", prog_name);
     fprintf(stderr, " Supported expression:\n");
     fprintf(stderr, "     dst "BHRED"host"reset", dst host IP(IPv4 and IPv6)\n");
     fprintf(stderr, "     src "BHRED"host"reset", src host IP(IPv4 and IPv6)\n");
@@ -38,30 +77,30 @@ static void usage(char *prog_name){
 }
 
 int main(int argc, char *argv[]){
-    if(argc != 5)
+    if(argc < 3)
         usage(argv[0]);
 
     int opt;
     char dev[MAX_DEV_SIZE];
     char expr[MAX_EXPR_SIZE] = "";     // default empty expression means all packets
-    _Bool has_file_opt = false;
-    _Bool has_if_opt = false;
-    while((opt = getopt(argc, argv, "hf:i:e:")) != -1){
+    char write_filename[MAX_WRITE_FILENAME];
+    int op_flags = 0;
+    while((opt = getopt(argc, argv, "hf:i:e:w:")) != -1){
 	switch(opt){
 		case 'h':
 			usage(argv[0]);
 
 		case 'f':
-			if(has_if_opt)
+			if(op_flags & OP_IF)
 				err_exit("file and interface option are mutual exclusion");
-			has_file_opt = true;
+			op_flags |= OP_FILE;
 			strcpy(dev, optarg);
 			break;
 
 		case 'i':
-			if(has_file_opt)
+			if(op_flags & OP_FILE)
 				err_exit("file and interface option are mutual exclusion");
-			has_if_opt = true;
+			op_flags |= OP_IF;
 			strcpy(dev, optarg);
 			break;
 
@@ -69,16 +108,39 @@ int main(int argc, char *argv[]){
 			strcpy(expr, optarg);
 			break;
 
+		case 'w':
+			op_flags |= OP_WRITE;
+			strcpy(write_filename, optarg);
+			break;
+
 		default: // invalid option => exit the program
 			err_exit("use '-h' option to check all available options");
 	}
     }
 
-    pcap_dev_handler(dev, expr, has_if_opt ? DEV_IF : DEV_FILE);
+    if(!(op_flags & OP_IF | op_flags & OP_FILE))
+		err_exit("must provide one interface or pcap_file to read, use '-h' to see usage");
+
+    if(op_flags & OP_WRITE){
+	    if(!(op_flags & OP_IF))
+		err_exit("write packets option only available when interface is specified");
+
+	    pcap_write_handler(dev, write_filename);
+    } else
+	    pcap_dev_handler(dev, expr, op_flags);
+
+    exit(0);
+}
+
+void write_packet(u_char *dumper, const struct pcap_pkthdr *header, const u_char *packet){
+	printf("\rGot %zu packets", packet_cnt);
+	fflush(stdout);
+	pcap_dump(dumper, header, packet);
+	packet_cnt++;
 }
 
 // simply ignore first argument since it is NULL
-void got_packet(u_char *args, const struct pcap_pkthdr *header, const u_char *packet){
+void read_packet(u_char *args, const struct pcap_pkthdr *header, const u_char *packet){
 	Ethernet *eth;
 	IP *ip;
 	TCP *tcp;
@@ -99,23 +161,36 @@ void got_packet(u_char *args, const struct pcap_pkthdr *header, const u_char *pa
 		return;
 	}
 	ip_ntohs(ip);
+	ip_handler(ip);
 
-	// ip info
-	char src_buf[INET_ADDRSTRLEN];
-	char dst_buf[INET_ADDRSTRLEN];
-	const char *src_ip;
-	const char *dst_ip;
-	src_ip = inet_ntop(AF_INET, (void *) &ip->src_ip, src_buf, INET_ADDRSTRLEN);
-	dst_ip = inet_ntop(AF_INET, (void *) &ip->dst_ip, dst_buf, INET_ADDRSTRLEN);
-	printf("IP (ttl: %u, proto: %u, src_ip: %s, dst_ip: %s, len: %u)\n", 
-			ip->ttl, ip->proto, src_ip, dst_ip, ip->len);
+	if(IPPROTO_UDP == ip->proto){
+		udp = (UDP *) (packet + SIZE_ETHERNET + size_ip);
+		udp_handler(udp);
 
-	if(IPPROTO_UDP == ip->proto)
-		udp_handler((UDP *) (packet + SIZE_ETHERNET + size_ip));
-	else if(IPPROTO_TCP == ip->proto)
-		tcp_handler((TCP *) (packet + SIZE_ETHERNET + size_ip));
+		if(53 == udp->src_port || 53 == udp->dst_port){
+			DNS *dns = (DNS *) (packet + SIZE_ETHERNET + size_ip + SIZE_UDP);
+			dns_ntohs(dns);
 
-	/* statistics of packets */
+			dns_handler(dns);
+		} else { // other application protocols
+		
+		}
+	} else if(IPPROTO_TCP == ip->proto){
+		tcp = (TCP *) (packet + SIZE_ETHERNET + size_ip);
+		tcp_handler(tcp);
+
+		u_int size_tcp;
+		size_tcp = get_tcp_offset(tcp) << 2;
+		if(53 == tcp->src_port || 53 == tcp->dst_port){
+			DNS *dns = (DNS *) (packet + SIZE_ETHERNET + size_ip + size_tcp);
+			dns_ntohs(dns);
+
+			dns_handler(dns);
+		} else { // other application protocols
+		
+		}
+	}
+
 	return;
 }
 
@@ -131,19 +206,28 @@ void tcp_handler(TCP *tcp){
 
 	printf("TCP (src port: %u, ", tcp->src_port);
 	printf("dest port: %u)\n", tcp->dst_port);
-	printf("=============================\n");
+	return;
 }
 
 void udp_handler(UDP *udp){
 	udp_ntohs(udp);
 
 	printf("UDP (src port: %u, ", udp->src_port);
-	printf("dest port: %u)\n", udp->dst_port);
-	printf("=============================\n");
+	printf("dest port: %u, ", udp->dst_port);
+	printf("data length: %u)\n", udp->len);
+	return;
 }
 
 void ip_handler(IP *ip){
-
+	char src_buf[INET_ADDRSTRLEN];
+	char dst_buf[INET_ADDRSTRLEN];
+	const char *src_ip;
+	const char *dst_ip;
+	src_ip = inet_ntop(AF_INET, (void *) &ip->src_ip, src_buf, INET_ADDRSTRLEN);
+	dst_ip = inet_ntop(AF_INET, (void *) &ip->dst_ip, dst_buf, INET_ADDRSTRLEN);
+	printf("IP (ttl: %u, proto: %u, src_ip: %s, dst_ip: %s, len: %u)\n", 
+			ip->ttl, ip->proto, src_ip, dst_ip, ip->len);
+	return;
 }
 
 void eth_info_print(Ethernet *eth){
@@ -180,55 +264,39 @@ void eth_info_print(Ethernet *eth){
 	return;
 }
 
-void pcap_dev_handler(char *dev, char *expr, DevType devtype){
-    char err_buf[PCAP_ERRBUF_SIZE];
+void pcap_dev_handler(const char *dev,const char *expr, int op_flags){
+    char err_buf[PCAP_ERRBUF_SIZE] = {0};
     int ret;
     pcap_t *handle;
 
-    if(DEV_FILE == devtype){
+    if(op_flags & OP_FILE){
 	handle = pcap_open_offline(dev, err_buf);
 	if(!handle)
 		err_exit(err_buf);
 	goto sniff;
-    } else if(DEV_IF == devtype){
-    	pcap_if_t *dev_ptr;
-    	ret = pcap_findalldevs(&dev_ptr, err_buf);
-    	if(ret == PCAP_ERROR)
-		err_exit(err_buf);
+    } else if(op_flags & OP_IF){
+        bpf_u_int32 net;
+        bpf_u_int32 mask;
 
-	while(dev_ptr){
-		if(dev_ptr->flags & PCAP_IF_UP && strcmp(dev_ptr->name, dev) == 0){
-		    bpf_u_int32 mask;
-		    bpf_u_int32 net;
+	handle = get_handle_by_dev(dev, &net, &mask);
+	if(handle){
+	    struct bpf_program filter;
+	    ret = pcap_compile(handle, &filter, expr, 0, net);
+	    if(ret == -1)
+		goto err;
 
-		    ret = pcap_lookupnet(dev, &net, &mask, err_buf);
-		    if(ret == -1){
-			fprintf(stderr, "Can't get netmask for device %s\n", dev);
-			net = 0;
-			mask = 0;
-		    }
+	    ret = pcap_setfilter(handle, &filter);
+	    if(ret == -1)
+		goto err;
 
-		    handle = pcap_open_live(dev, BUFSIZ, 1, 1000, err_buf);
-		    if(!handle)
-			err_exit(err_buf);
-
-		    struct bpf_program filter;
-		    ret = pcap_compile(handle, &filter, expr, 0, net);
-		    if(ret == -1)
-			goto err;
-
-		    ret = pcap_setfilter(handle, &filter);
-		    if(ret == -1)
-			goto err;
-
-		    goto sniff;
-		}
-		dev_ptr = dev_ptr->next;
+	    goto sniff;
 	}
+
 	err_exit("interface not found");
     }
+
 sniff:
-    ret = pcap_loop(handle, LOOP_FOREVER, got_packet, NULL);
+    ret = pcap_loop(handle, LOOP_FOREVER, read_packet, NULL);
     if(ret == -1)
 	goto err;
 
@@ -238,4 +306,298 @@ sniff:
 err:
     pcap_close(handle);
     err_exit(pcap_geterr(handle));
+}
+
+void pcap_write_handler(const char *dev, const char *write_filename){
+	int ret;
+        bpf_u_int32 net;
+        bpf_u_int32 mask;
+	pcap_t *handle = get_handle_by_dev(dev, &net, &mask);
+	
+        pcap_dumper_t *dumper;
+	if(handle){
+   	    printf("Listening on %s, snapshot length %zu bytes\n", dev, MAX_SNAPLEN);
+	    
+	    dumper = pcap_dump_open(handle, write_filename);
+	    if(!dumper)
+		    err_exit(pcap_geterr(handle));
+
+	    ret = pcap_loop(handle, LOOP_FOREVER, write_packet, (u_char *) dumper);
+	    if(ret == -1)
+		    err_exit(pcap_geterr(handle));
+	} else
+		    err_exit("Invalid interface");
+
+done:
+	pcap_close(handle);
+	pcap_dump_close(dumper);
+	return;
+}
+
+pcap_t *get_handle_by_dev(const char *dev, bpf_u_int32 *net, bpf_u_int32 *mask){
+    	pcap_if_t *dev_ptr;
+	int ret;
+	char err_buf[PCAP_ERRBUF_SIZE];
+    	pcap_t *handle;
+
+    	if(pcap_findalldevs(&dev_ptr, err_buf) == PCAP_ERROR)
+		err_exit(err_buf);
+
+	while(dev_ptr){
+		if(dev_ptr->flags & PCAP_IF_UP && strcmp(dev_ptr->name, dev) == 0){
+		    ret = pcap_lookupnet(dev, net, mask, err_buf);
+		    if(ret == -1){
+			fprintf(stderr, "Can't get netmask for device %s\n", dev);
+			*net = 0;
+			*mask = 0;
+		    }
+
+		    handle = pcap_open_live(dev, MAX_SNAPLEN, 1, 1000, err_buf);
+		    if(!handle)
+			err_exit(err_buf);
+
+		    pcap_freealldevs(dev_ptr);
+		    return handle;
+		}
+		dev_ptr = dev_ptr->next;
+	}
+	return NULL;
+}
+
+void dns_handler(DNS *dns){
+	u_short i, j;
+	u_short id = dns->id;
+	u_short flags = dns->flags;
+	u_short qd_cnt = dns->qd_cnt;
+	u_short an_cnt = dns->an_cnt;
+	u_short ns_cnt = dns->ns_cnt;
+	u_short ar_cnt = dns->ar_cnt;
+
+	/*
+	printf("qr: %x\n", get_dns_qr_bit(dns));
+	printf("opcode: %x\n", get_dns_opcode(dns));
+	printf("aa: %x\n", get_dns_aa_bit(dns));
+	printf("tc: %x\n", get_dns_tc_bit(dns));
+	printf("rd: %x\n", get_dns_rd_bit(dns));
+	printf("ra: %x\n", get_dns_ra_bit(dns));
+	printf("z: %x\n", get_dns_z(dns));
+	printf("rcode: %x\n", get_dns_rcode(dns));
+	*/
+
+	printf("DNS(");
+	printf("ID: %u, Flags: %x, Questions: %u, Answers: %u, Authority RRs: %u, Additional RRs: %u)\n",
+			id, flags, qd_cnt, an_cnt, ns_cnt, ar_cnt);
+	
+	u_char *payload = ((u_char *) dns) + sizeof(DNS);
+	
+	// query
+	u_short query_nr = 1;
+	while(qd_cnt--){
+		// parsing qname
+		printf("Query #%u:\n", query_nr);
+		printf("\tQName: ");
+		dns_label2str(&payload, (u_char *) dns);
+
+		// parsing qtype
+		printf("\tQType: ");
+		u_short qtype_idx = ntohs(*((u_short *) payload));
+		if(qtype_idx == 28)
+			qtype_idx= 17;
+		const char *qtype_str = dns_types[qtype_idx];
+		printf("%s\n", qtype_str);
+		payload += 2;
+
+		// todo:  parsing qclass(skip here first)
+		payload += 2;
+
+		query_nr++;
+	}
+
+	// answer
+	u_short ans_nr = 1;
+	while(an_cnt--){
+		// parsing answers
+		printf("Answer #%u:\n", ans_nr);
+		printf("\tName: ");
+		dns_label2str(&payload, (u_char *) dns);
+
+		printf("\tType: ");
+		u_short type_idx = ntohs(*((u_short *) payload));
+		if(type_idx == 28)
+			type_idx = 17;
+		const char *qtype_str = dns_types[type_idx];
+		printf("%s\n", qtype_str);
+		payload += 2;
+		
+		// todo: parsing class(skip here first)
+		payload += 2;
+
+		// parsing ttl
+		printf("\tTTL: ");
+		uint32_t ttl = ntohl(*((uint32_t *) payload));
+		printf("%u\n", ttl);
+		payload += 4;
+
+		// parsing data length
+		printf("\tdata length: ");
+		u_short len = ntohs(*((u_short *) payload));
+		printf("%u\n", len);
+		payload += 2;
+
+		const char *addr;
+		if(0 == strcmp(qtype_str, "A")){
+			char buf[INET_ADDRSTRLEN];
+			addr = inet_ntop(AF_INET, (void *) payload, buf, INET_ADDRSTRLEN);
+		} else if(0 == strcmp(qtype_str, "AAAA")){
+			char buf[INET6_ADDRSTRLEN];
+			addr = inet_ntop(AF_INET6, (void *) payload, buf, INET6_ADDRSTRLEN);
+		}
+		printf("\tAddress: ");
+		printf("%s\n", addr);
+		ans_nr++;
+	}
+
+	// authoritative nameservers
+	u_short ns_nr = 1;
+	while(ns_cnt--){
+		// parsing authoritative nameservers
+		printf("Authoritative nameservers #%u:\n", ns_nr);
+		printf("\tName: ");
+		dns_label2str(&payload, (u_char *) dns);
+
+		printf("\tType: ");
+		u_short type_idx = ntohs(*((u_short *) payload));
+		if(41 == type_idx)
+			type_idx = 12;
+		const char *qtype_str = dns_types[type_idx];
+		printf("%s\n", qtype_str);
+		payload += 2;
+		
+		// todo: parsing class(skip here first)
+		payload += 2;
+
+		// parsing ttl
+		printf("\tTTL: ");
+		uint32_t ttl = ntohl(*((uint32_t *) payload));
+		printf("%u\n", ttl);
+		payload += 4;
+
+		// parsing data length
+		printf("\tdata length: ");
+		u_short len = ntohs(*((u_short *) payload));
+		printf("%u\n", len);
+		payload += 2;
+
+		// parsing primary name server
+		printf("\tPrimary name server: ");
+		dns_label2str(&payload, (u_char *) dns);
+
+		// parsing responsible authority's mailbox
+		printf("\tResponsible authority's mailbox: ");
+		dns_label2str(&payload, (u_char *) dns);
+
+		// parsing serial number
+		printf("\tSerial number: ");
+		uint32_t serial_nr = ntohl(*((uint32_t *) payload));
+		printf("%u\n", serial_nr);
+		payload += 4;
+
+		// parsing refresh interval
+		printf("\tRefresh interval: ");
+		uint32_t refresh_int = ntohl(*((uint32_t *) payload));
+		printf("%u\n", refresh_int);
+		payload += 4;
+
+		// parsing retry interval
+		printf("\tRetry interval: ");
+		uint32_t retry_int = ntohl(*((uint32_t *) payload));
+		printf("%u\n", retry_int);
+		payload += 4;
+
+		// parsing expire limit
+		printf("\tExpire limit: ");
+		uint32_t expire_lim = ntohl(*((uint32_t *) payload));
+		printf("%u\n", expire_lim);
+		payload += 4;
+		
+		// parsing mininum ttl
+		printf("\tMinimum TTL: ");
+		uint32_t ttl_min = ntohl(*((uint32_t *) payload));
+		printf("%u\n", ttl_min);
+		payload += 4;
+
+		ns_nr++;
+	}
+
+	// todo: additional records
+	printf("=========================================================================================\n");
+}
+
+/*
+ * since domain name label could be pointer due to message compression(RFC 1035 4.1.4)
+ * we have to take care of it
+ * if first 2 bits of octet are 00 -> normal
+ * if first 2 bits of octet are 11 -> pointer
+ * first 2 bits, 10 and 10 are reserved for future
+ * */
+void dns_label2str(u_char **label, u_char *start){
+	u_char *label_ptr = *label;
+	u_char **label_pptr = &label_ptr;
+	u_char *tmp = NULL; // pointer to resume before function return if any pointer seen before
+	u_char label_len;
+	u_short offset = 0;
+
+	// root
+	if(!*label_ptr){
+		printf("<Root>\n");
+		*label = label_ptr + 1;  // skip the null
+		return;
+	}
+
+	// non root
+	while(*label_ptr){
+		label_len = *label_ptr;
+
+		if(label_len & 0xC0){ // pointer
+			if(!tmp){
+				tmp = *label_pptr + 2; 
+				/*
+				printf("tmp_one: %x\n", *tmp);
+				printf("tmp_two: %x\n", *(tmp + 1));
+				printf("tmp_three: %x\n", *(tmp + 2));
+				printf("tmp_four: %x\n", *(tmp + 3));
+				*/
+			}
+			offset = ((*label_ptr) & 0x3F) | *(label_ptr + 1);
+			//printf("offset: %u", offset);
+			label_ptr = start + offset;
+			/*
+			printf("one: %x\n", *label_ptr);
+			printf("two: %x\n", *(label_ptr + 1));
+			printf("three: %x\n", *(label_ptr + 2));
+			printf("four: %x\n", *(label_ptr + 3));
+			printf("five: %x\n", *(label_ptr + 4));
+			printf("sive: %x\n", *(label_ptr + 5));
+			*/
+			goto next;
+		} else {              // octet length
+			label_ptr++;
+			for(u_short i = 0; i < label_len; ++i){
+				printf("%c", *label_ptr);
+				label_ptr++;
+			}
+
+			if(*label_ptr)
+				printf(".");
+			else {
+				printf("\n");
+				break;
+			}
+		}
+	next:;
+	}
+	label_ptr++; // skip null
+
+	*label = tmp ? tmp : label_ptr; // update label
+	return;
 }
