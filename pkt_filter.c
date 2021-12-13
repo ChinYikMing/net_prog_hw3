@@ -1,6 +1,7 @@
 #include <stdio.h>
+#include <time.h>
 #include <assert.h>
-#include <stdbool.h>
+#include <stdbool.h> 
 #include <stdlib.h> 
 #include <pthread.h>
 #include <string.h>
@@ -50,6 +51,7 @@ size_t packet_cnt = 0;
 
 void pcap_dev_handler(const char *dev, const char *expr, int op_flags);
 void pcap_write_handler(const char *dev, const char *write_filename);
+void pcap_show_timestamp(const struct timeval *ts);
 
 void read_packet(u_char *args, const struct pcap_pkthdr *header, const u_char *packet);
 void write_packet(u_char *handle, const struct pcap_pkthdr *header, const u_char *packet);
@@ -150,6 +152,10 @@ void read_packet(u_char *args, const struct pcap_pkthdr *header, const u_char *p
 
 	eth = (Ethernet *) packet;
 	eth_ntohs(eth);
+
+	// show sniff timestamp
+	printf("Timestamp: ");
+	pcap_show_timestamp(&header->ts);
 
 	// show MAC address (cmd("ip link") to check your interface MAC address) and type
 	eth_info_print(eth);
@@ -601,3 +607,13 @@ void dns_label2str(u_char **label, u_char *start){
 	*label = tmp ? tmp : label_ptr; // update label
 	return;
 }
+
+void pcap_show_timestamp(const struct timeval *ts){
+	time_t t = ts->tv_sec + ts->tv_usec / 100000;
+	struct tm *loc_time = localtime(&t);
+	char time_str[BUFSIZ] = {0};
+	strftime(time_str, BUFSIZ, "%y-%m-%d %H:%M:%S", loc_time);
+
+	printf("%s\n", time_str);
+}
+
