@@ -1,17 +1,18 @@
 #include <stdio.h>
 #include <time.h>
-#include <assert.h>
+#include <assert.h> 
 #include <stdbool.h> 
 #include <stdlib.h> 
+#include <signal.h>
 #include <pthread.h>
-#include <string.h>
+#include <string.h> 
 #include <unistd.h>
 #include <arpa/inet.h>
 #include "pkt_filter.h"
 #include "basis.h"
 
 #define LOOP_FOREVER -1
-#define MAX_DEV_SIZE 512
+#define MAX_DEV_SIZE 64
 #define MAX_EXPR_SIZE 512
 #define MAX_WRITE_FILENAME 512
 #define MAX_SNAPLEN 8192
@@ -48,6 +49,9 @@ static const char *dns_types[18] = {
 	"AAAA"   /* IPv6 Host Address (RFC 1886) */
 };
 size_t packet_cnt = 0;
+int datalink;
+pcap_t *handle;
+char dev[MAX_DEV_SIZE];
 
 void pcap_dev_handler(const char *dev, const char *expr, int op_flags);
 void pcap_write_handler(const char *dev, const char *write_filename);
@@ -58,32 +62,16 @@ void write_packet(u_char *handle, const struct pcap_pkthdr *header, const u_char
 
 pcap_t *get_handle_by_dev(const char *dev, bpf_u_int32 *net, bpf_u_int32 *mask); // caller is responsible to close the handle
 
-static void usage(char *prog_name){
-    fprintf(stderr, " Usage:\n");
-    fprintf(stderr, " %s < -i "BHRED"interface"reset" [-w "BHRED"saved_filename"reset"] | -f "BHRED"pcap_filename"reset" > "
-		    "[-e \""BHRED"expression"reset"\", default will sniff all packets]\n", prog_name);
-    fprintf(stderr, " Supported expression:\n");
-    fprintf(stderr, "     dst "BHRED"host"reset", dst host IP(IPv4 and IPv6)\n");
-    fprintf(stderr, "     src "BHRED"host"reset", src host IP(IPv4 and IPv6)\n");
-    fprintf(stderr, "     host "BHRED"host"reset", IP(IPv4 and IPv6), no matter src or dst host\n");
-    fprintf(stderr, "     dst port "BHRED"port"reset", dest host port\n");
-    fprintf(stderr, "     src port "BHRED"port"reset", src host port\n");
-    fprintf(stderr, "     port "BHRED"port"reset", no matter src or dst port\n");
-    fprintf(stderr, "     less "BHRED"length"reset", packet with less than or equal length\n");
-    fprintf(stderr, "     greater "BHRED"length"reset", packet with greater than or equal length\n");
-    fprintf(stderr, " Example of expression: \"host 140.123.26.27 && port 80\"\n");
-    fprintf(stderr, " A lot more available expression in "
-		    "\"https://www.tcpdump.org/manpages/pcap-filter.7.html\"\n");
-
-    err_exit(" Please try again!");
-}
+void sig_handler(int signum);
+static void usage(const char *prog_name);
 
 int main(int argc, char *argv[]){
+	/*
     if(argc < 3)
         usage(argv[0]);
+	*/
 
     int opt;
-    char dev[MAX_DEV_SIZE];
     char expr[MAX_EXPR_SIZE] = "";     // default empty expression means all packets
     char write_filename[MAX_WRITE_FILENAME];
     int op_flags = 0;
@@ -120,8 +108,9 @@ int main(int argc, char *argv[]){
 	}
     }
 
+    // default select any available interface
     if(!(op_flags & OP_IF | op_flags & OP_FILE))
-		err_exit("must provide one interface or pcap_file to read, use '-h' to see usage");
+	    	op_flags |= OP_IF;
 
     if(op_flags & OP_WRITE){
 	    if(!(op_flags & OP_IF))
@@ -154,15 +143,28 @@ void read_packet(u_char *args, const struct pcap_pkthdr *header, const u_char *p
 	printf("Timestamp: ");
 	pcap_show_timestamp(&header->ts);
 
-	eth = (Ethernet *) packet;
-	eth_ntohs(eth);
+	// determine Link Layer type
+	switch(datalink){
+		//case LINKTYPE_ETHERNET:
+		case DLT_EN10MB:
+			eth = (Ethernet *) packet;
+			eth_ntohs(eth);
 
-	// show MAC address (cmd("ip link") to check your interface MAC address) and type
-	eth_info_print(eth);
+			// show MAC address (cmd("ip link") to check your interface MAC address) and type
+			eth_info_print(eth);
 
-	if(!(eth->type & ETHERTYPE_IP)){ // unsupported Internet Layer protocols
-		printf("Unknown protocol in Internet Layer, please use IPv4 instead\n");
-		goto end;
+			if(!(eth->type & ETHERTYPE_IP)){ // unsupported Internet Layer protocols
+				printf("Unknown protocol in Internet Layer, please use IPv4 instead\n");
+				goto end;
+			}
+			break;
+
+		case DLT_NULL:
+			break;
+
+		default:
+			printf("Unknown protocol in Link Layer, please use Ethernet or Loopback instead\n");
+			goto end;
 	}
 
 	ip = (IP *) (packet + SIZE_ETHERNET);
@@ -289,7 +291,6 @@ void eth_info_print(Ethernet *eth){
 void pcap_dev_handler(const char *dev,const char *expr, int op_flags){
     char err_buf[PCAP_ERRBUF_SIZE] = {0};
     int ret;
-    pcap_t *handle;
 
     if(op_flags & OP_FILE){
 	handle = pcap_open_offline(dev, err_buf);
@@ -318,6 +319,13 @@ void pcap_dev_handler(const char *dev,const char *expr, int op_flags){
     }
 
 sniff:
+    printf("Listening on %s, snapshot length %zu bytes\n", dev, MAX_SNAPLEN);
+
+    datalink = pcap_datalink(handle);
+    
+    // handle ctrl-C signal
+    signal(SIGINT, sig_handler);
+
     ret = pcap_loop(handle, LOOP_FOREVER, read_packet, NULL);
     if(ret == -1)
 	goto err;
@@ -357,16 +365,17 @@ done:
 }
 
 pcap_t *get_handle_by_dev(const char *dev, bpf_u_int32 *net, bpf_u_int32 *mask){
-    	pcap_if_t *dev_ptr;
+    	pcap_if_t *dev_ptr, *tmp;
 	int ret;
 	char err_buf[PCAP_ERRBUF_SIZE];
     	pcap_t *handle;
 
     	if(pcap_findalldevs(&dev_ptr, err_buf) == PCAP_ERROR)
 		err_exit(err_buf);
+	tmp = dev_ptr;
 
 	while(dev_ptr){
-		if(dev_ptr->flags & PCAP_IF_UP && strcmp(dev_ptr->name, dev) == 0){
+		if(dev_ptr->flags & PCAP_IF_RUNNING && strcmp(dev_ptr->name, dev) == 0){
 		    ret = pcap_lookupnet(dev, net, mask, err_buf);
 		    if(ret == -1){
 			fprintf(stderr, "Can't get netmask for device %s\n", dev);
@@ -383,6 +392,31 @@ pcap_t *get_handle_by_dev(const char *dev, bpf_u_int32 *net, bpf_u_int32 *mask){
 		}
 		dev_ptr = dev_ptr->next;
 	}
+
+	// default select any available interface but not loopback interface
+	dev_ptr = tmp;
+	while(dev_ptr){
+		if((dev_ptr->flags & PCAP_IF_RUNNING) && !(dev_ptr->flags & PCAP_IF_LOOPBACK)){
+		    strcpy(dev, dev_ptr->name);
+
+		    ret = pcap_lookupnet(dev_ptr->name, net, mask, err_buf);
+		    if(ret == -1){
+			fprintf(stderr, "Can't get netmask for device %s\n", dev);
+			*net = 0;
+			*mask = 0;
+		    }
+
+		    handle = pcap_open_live(dev_ptr->name, MAX_SNAPLEN, 1, 1000, err_buf);
+		    if(!handle)
+			err_exit(err_buf);
+
+		    pcap_freealldevs(dev_ptr);
+		    return handle;
+		}
+		dev_ptr = dev_ptr->next;
+	}
+	
+	// no any interface are available
 	return NULL;
 }
 
@@ -734,3 +768,35 @@ void pcap_show_timestamp(const struct timeval *ts){
 	printf("%s\n", time_str);
 }
 
+void sig_handler(int signum){
+	// show pcap statistics
+	struct pcap_stat stat;
+
+	putc('\n', stdout);
+	if(pcap_stats(handle, &stat) < 0)
+		err_exit(pcap_geterr(handle));
+	printf("%d packets recerved by filter\n", stat.ps_recv);
+	printf("%d packets dropped by kernel\n", stat.ps_drop);
+
+	exit(0);
+}
+
+static void usage(const char *prog_name){
+    fprintf(stderr, " Usage:\n");
+    fprintf(stderr, " %s < -i "BHRED"interface"reset" [-w "BHRED"saved_filename"reset"] | -f "BHRED"pcap_filename"reset" > "
+		    "[-e \""BHRED"expression"reset"\", default will sniff all packets]\n", prog_name);
+    fprintf(stderr, " Supported expression:\n");
+    fprintf(stderr, "     dst "BHRED"host"reset", dst host IP(IPv4 and IPv6)\n");
+    fprintf(stderr, "     src "BHRED"host"reset", src host IP(IPv4 and IPv6)\n");
+    fprintf(stderr, "     host "BHRED"host"reset", IP(IPv4 and IPv6), no matter src or dst host\n");
+    fprintf(stderr, "     dst port "BHRED"port"reset", dest host port\n");
+    fprintf(stderr, "     src port "BHRED"port"reset", src host port\n");
+    fprintf(stderr, "     port "BHRED"port"reset", no matter src or dst port\n");
+    fprintf(stderr, "     less "BHRED"length"reset", packet with less than or equal length\n");
+    fprintf(stderr, "     greater "BHRED"length"reset", packet with greater than or equal length\n");
+    fprintf(stderr, " Example of expression: \"host 140.123.26.27 && port 80\"\n");
+    fprintf(stderr, " A lot more available expression in "
+		    "\"https://www.tcpdump.org/manpages/pcap-filter.7.html\"\n");
+
+    err_exit(" Please try again!");
+}
