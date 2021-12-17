@@ -408,9 +408,9 @@ void dns_handler(DNS *dns){
 		u_short qtype_idx = ntohs(*((u_short *) payload));
 		printf("\tQType: ");
 
-		if(qtype_idx == 0){
+		if(qtype_idx == 0 || qtype_idx > 28){
 			printf("Unknown\n");
-			return;
+			goto end;
 		}
 
 		if(qtype_idx == 28)
@@ -542,6 +542,9 @@ void dns_handler(DNS *dns){
 			printf("%s\n", addr);
 
 			payload += len;
+		} else if(0 == strcmp(qtype_str, "NS")){
+			printf("\tName server:");
+			dns_label2str(&payload, (u_char *) dns);
 		}
 
 		ans_nr++;
@@ -625,7 +628,7 @@ void dns_handler(DNS *dns){
 			uint32_t ttl_min = ntohl(*((uint32_t *) payload));
 			printf("%u\n", ttl_min);
 			payload += 4;
-		} else {
+		} else { // NS
 			// parsing name server
 			printf("\tName server: ");
 			dns_label2str(&payload, (u_char *) dns);
@@ -634,6 +637,7 @@ void dns_handler(DNS *dns){
 		ns_nr++;
 	}
 
+end:
 	// todo: additional records
 	printf("=========================================================================================\n");
 }
