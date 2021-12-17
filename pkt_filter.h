@@ -2,6 +2,7 @@
 #define PACKET_FILTER_H 
 #include <pcap.h>
 #include <netinet/in.h>
+#include <netinet/if_ether.h>
 
 #define __ntohs(pkt, field) \
 	pkt->field = ntohs(pkt->field)
@@ -13,7 +14,6 @@ typedef struct ethernet {
 	u_char src_mac[MAC_ADDR_LEN];
 	u_short type;
 } Ethernet;
-#define IPv4 0x0800
 #define eth_ntohs(eth){ \
 	__ntohs(eth, type); \
 }

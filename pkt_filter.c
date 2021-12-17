@@ -150,21 +150,26 @@ void read_packet(u_char *args, const struct pcap_pkthdr *header, const u_char *p
 	u_char *payload;
 	u_int size_ip;
 
-	eth = (Ethernet *) packet;
-	eth_ntohs(eth);
-
 	// show sniff timestamp
 	printf("Timestamp: ");
 	pcap_show_timestamp(&header->ts);
 
+	eth = (Ethernet *) packet;
+	eth_ntohs(eth);
+
 	// show MAC address (cmd("ip link") to check your interface MAC address) and type
 	eth_info_print(eth);
+
+	if(!(eth->type & ETHERTYPE_IP)){ // unsupported Internet Layer protocols
+		printf("Unknown protocol in Internet Layer, please use IPv4 instead\n");
+		goto end;
+	}
 
 	ip = (IP *) (packet + SIZE_ETHERNET);
 	size_ip = get_ip_hdr_len(ip) << 2; // multiple 4 to get the total bytes since it is 4-byte words
 	if(size_ip < 20){
 		fprintf(stderr, "Invalid IP header length: %u bytes\n", size_ip);
-		return;
+		goto end;
 	}
 	ip_ntohs(ip);
 	ip_handler(ip);
@@ -178,8 +183,9 @@ void read_packet(u_char *args, const struct pcap_pkthdr *header, const u_char *p
 			dns_ntohs(dns);
 
 			dns_handler(dns);
-		} else { // other application protocols
-		
+		} else { // unsupported Application Layer protocols
+			printf("Unknown protocol in Application Layer, only supported DNS(rfc1035)\n");
+			goto end;
 		}
 	} else if(IPPROTO_TCP == ip->proto){
 		tcp = (TCP *) (packet + SIZE_ETHERNET + size_ip);
@@ -192,11 +198,17 @@ void read_packet(u_char *args, const struct pcap_pkthdr *header, const u_char *p
 			dns_ntohs(dns);
 
 			dns_handler(dns);
-		} else { // other application protocols
-		
+		} else { // unsupported Application Layer protocols
+			printf("Unknown protocol in Application Layer, only supported DNS(rfc1035)\n");
+			goto end;
 		}
+	} else {  // unsupported Transport Layer protocols
+		printf("Unknown protocol in Transport Layer, please use TCP/UDP instead\n");
+		goto end;
 	}
 
+end:
+	printf("=========================================================================================\n");
 	return;
 }
 
@@ -265,8 +277,12 @@ void eth_info_print(Ethernet *eth){
 		ptr++;
 	}
 
-	if(eth->type & IPv4)
-		printf("type: IPv4)\n");
+	printf("type: ");
+	if(eth->type & ETHERTYPE_IP)
+		printf("IPv4");
+	else
+		printf("Unknown");
+	printf(")\n");
 	return;
 }
 
@@ -410,7 +426,7 @@ void dns_handler(DNS *dns){
 
 		if(qtype_idx == 0 || qtype_idx > 28){
 			printf("Unknown\n");
-			goto end;
+			return;
 		}
 
 		if(qtype_idx == 28)
@@ -637,9 +653,7 @@ void dns_handler(DNS *dns){
 		ns_nr++;
 	}
 
-end:
 	// todo: additional records
-	printf("=========================================================================================\n");
 }
 
 /*
