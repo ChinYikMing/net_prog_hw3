@@ -420,7 +420,17 @@ void dns_handler(DNS *dns){
 		printf("%s\n", qtype_str);
 		payload += 2;
 
-		// todo:  parsing qclass(skip here first)
+		// parsing qclass
+		printf("\tQClass: ");
+		u_short qclass = ntohs(*((u_short *) payload));
+		if(qclass == CLASS_IN){
+			printf("IN");
+		} else if(qclass == CLASS_CH){
+		
+		} else if(qclass == CLASS_HS){
+		
+		}
+		printf("\n");
 		payload += 2;
 
 		query_nr++;
@@ -442,7 +452,17 @@ void dns_handler(DNS *dns){
 		printf("%s\n", qtype_str);
 		payload += 2;
 		
-		// todo: parsing class(skip here first)
+		// parsing class
+		printf("\tQClass: ");
+		u_short qclass = ntohs(*((u_short *) payload));
+		if(qclass == CLASS_IN){
+			printf("IN");
+		} else if(qclass == CLASS_CH){
+		
+		} else if(qclass == CLASS_HS){
+		
+		}
+		printf("\n");
 		payload += 2;
 
 		// parsing ttl
@@ -502,7 +522,11 @@ void dns_handler(DNS *dns){
 			}
 			printf("\n");
 		} else if(0 == strcmp(qtype_str, "MX")){
-			printf("\tMail server: ");
+			u_short preference = ntohs(*((u_short *) payload));
+			printf("\tPreference: %u\n", preference);
+			payload += 2;
+
+			printf("\tMail exchange: ");
 			dns_label2str(&payload, (u_char *) dns);
 		} else if(0 == strcmp(qtype_str, "TXT")){
 			printf("\ttext: ");
@@ -538,7 +562,17 @@ void dns_handler(DNS *dns){
 		const char *qtype_str = dns_types[type_idx];
 		printf("%s\n", qtype_str); payload += 2;
 		
-		// todo: parsing class(skip here first)
+		// parsing class
+		printf("\tQClass: ");
+		u_short qclass = ntohs(*((u_short *) payload));
+		if(qclass == CLASS_IN){
+			printf("IN");
+		} else if(qclass == CLASS_CH){
+		
+		} else if(qclass == CLASS_HS){
+		
+		}
+		printf("\n");
 		payload += 2;
 
 		// parsing ttl

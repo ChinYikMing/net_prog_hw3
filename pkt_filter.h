@@ -1,5 +1,5 @@
 #ifndef PACKET_FILTER_H
-#define PACKET_FILTER_H
+#define PACKET_FILTER_H 
 #include <pcap.h>
 #include <netinet/in.h>
 
@@ -105,6 +105,12 @@ typedef struct dns {
 	u_short ns_cnt;
 	u_short ar_cnt;
 } DNS;
+typedef enum q_class {
+	CLASS_IN = 1,
+	CLASS_CH,
+	CLASS_HS,
+	CLASS_CNT
+} QClass;
 #define get_dns_qr_bit(dns) ((dns->flags) >> 15)
 #define get_dns_opcode(dns) (((dns->flags) >> 11) & 0xf)
 #define get_dns_aa_bit(dns) (((dns->flags) >> 10) & 0x1)
