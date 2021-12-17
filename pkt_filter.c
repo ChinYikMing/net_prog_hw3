@@ -405,10 +405,17 @@ void dns_handler(DNS *dns){
 		dns_label2str(&payload, (u_char *) dns);
 
 		// parsing qtype
-		printf("\tQType: ");
 		u_short qtype_idx = ntohs(*((u_short *) payload));
+		printf("\tQType: ");
+
+		if(qtype_idx == 0){
+			printf("Unknown\n");
+			return;
+		}
+
 		if(qtype_idx == 28)
 			qtype_idx= 17;
+
 		const char *qtype_str = dns_types[qtype_idx];
 		printf("%s\n", qtype_str);
 		payload += 2;
@@ -454,12 +461,65 @@ void dns_handler(DNS *dns){
 		if(0 == strcmp(qtype_str, "A")){
 			char buf[INET_ADDRSTRLEN];
 			addr = inet_ntop(AF_INET, (void *) payload, buf, INET_ADDRSTRLEN);
+			printf("\tAddress: ");
+			printf("%s\n", addr);
+
+			payload += len;
+		} else if(0 == strcmp(qtype_str, "CNAME")){
+			printf("\tName server: ");
+			dns_label2str(&payload, (u_char *) dns);
+		} else if(0 == strcmp(qtype_str, "WKS")){
+			printf("\tName server: ");
+			dns_label2str(&payload, (u_char *) dns);
+
+		} else if(0 == strcmp(qtype_str, "PTR")){
+			printf("\tName server: ");
+			dns_label2str(&payload, (u_char *) dns);
+		} else if(0 == strcmp(qtype_str, "HINFO")){
+			u_char cpu_len = *((u_short *) payload);
+			payload += 1;
+			printf("\tCPU: ");
+			if(cpu_len){
+				for(u_char i = 0; i < cpu_len; ++i){
+					printf("%c", *payload);
+					payload++;
+				}
+			} else {
+				printf("\"\"");
+			}
+			printf("\n");
+
+			u_char os_len = *((u_short *) payload);
+			payload += 1;
+			printf("\tOS: ");
+			if(os_len){
+				for(u_char i = 0; i < os_len; ++i){
+					printf("%c", *payload);
+					payload++;
+				}
+			} else {
+				printf("\"\"");
+			}
+			printf("\n");
+		} else if(0 == strcmp(qtype_str, "MX")){
+			printf("\tMail server: ");
+			dns_label2str(&payload, (u_char *) dns);
+		} else if(0 == strcmp(qtype_str, "TXT")){
+			printf("\ttext: ");
+			for(u_short i = 0; i < len; ++i)
+				printf("%c", *(payload +i));
+			printf("\n");
+
+			payload += len;
 		} else if(0 == strcmp(qtype_str, "AAAA")){
 			char buf[INET6_ADDRSTRLEN];
 			addr = inet_ntop(AF_INET6, (void *) payload, buf, INET6_ADDRSTRLEN);
+			printf("\tAddress: ");
+			printf("%s\n", addr);
+
+			payload += len;
 		}
-		printf("\tAddress: ");
-		printf("%s\n", addr);
+
 		ans_nr++;
 	}
 
@@ -476,8 +536,7 @@ void dns_handler(DNS *dns){
 		if(41 == type_idx)
 			type_idx = 12;
 		const char *qtype_str = dns_types[type_idx];
-		printf("%s\n", qtype_str);
-		payload += 2;
+		printf("%s\n", qtype_str); payload += 2;
 		
 		// todo: parsing class(skip here first)
 		payload += 2;
@@ -494,43 +553,49 @@ void dns_handler(DNS *dns){
 		printf("%u\n", len);
 		payload += 2;
 
-		// parsing primary name server
-		printf("\tPrimary name server: ");
-		dns_label2str(&payload, (u_char *) dns);
+		if(0 == strcmp(qtype_str, "SOA")){
+			// parsing primary name server
+			printf("\tPrimary name server: ");
+			dns_label2str(&payload, (u_char *) dns);
+			
+			// parsing responsible authority's mailbox
+			printf("\tResponsible authority's mailbox: ");
+			dns_label2str(&payload, (u_char *) dns);
 
-		// parsing responsible authority's mailbox
-		printf("\tResponsible authority's mailbox: ");
-		dns_label2str(&payload, (u_char *) dns);
+			// parsing serial number
+			printf("\tSerial number: ");
+			uint32_t serial_nr = ntohl(*((uint32_t *) payload));
+			printf("%u\n", serial_nr);
+			payload += 4;
 
-		// parsing serial number
-		printf("\tSerial number: ");
-		uint32_t serial_nr = ntohl(*((uint32_t *) payload));
-		printf("%u\n", serial_nr);
-		payload += 4;
+			// parsing refresh interval
+			printf("\tRefresh interval: ");
+			uint32_t refresh_int = ntohl(*((uint32_t *) payload));
+			printf("%u\n", refresh_int);
+			payload += 4;
 
-		// parsing refresh interval
-		printf("\tRefresh interval: ");
-		uint32_t refresh_int = ntohl(*((uint32_t *) payload));
-		printf("%u\n", refresh_int);
-		payload += 4;
+			// parsing retry interval
+			printf("\tRetry interval: ");
+			uint32_t retry_int = ntohl(*((uint32_t *) payload));
+			printf("%u\n", retry_int);
+			payload += 4;
 
-		// parsing retry interval
-		printf("\tRetry interval: ");
-		uint32_t retry_int = ntohl(*((uint32_t *) payload));
-		printf("%u\n", retry_int);
-		payload += 4;
-
-		// parsing expire limit
-		printf("\tExpire limit: ");
-		uint32_t expire_lim = ntohl(*((uint32_t *) payload));
-		printf("%u\n", expire_lim);
-		payload += 4;
-		
-		// parsing mininum ttl
-		printf("\tMinimum TTL: ");
-		uint32_t ttl_min = ntohl(*((uint32_t *) payload));
-		printf("%u\n", ttl_min);
-		payload += 4;
+			// parsing expire limit
+			printf("\tExpire limit: ");
+			uint32_t expire_lim = ntohl(*((uint32_t *) payload));
+			printf("%u\n", expire_lim);
+			payload += 4;
+			
+			// parsing mininum ttl
+			printf("\tMinimum TTL: ");
+			uint32_t ttl_min = ntohl(*((uint32_t *) payload));
+			printf("%u\n", ttl_min);
+			payload += 4;
+		} else {
+			// parsing name server
+			printf("\tName server: ");
+			dns_label2str(&payload, (u_char *) dns);
+		}
 
 		ns_nr++;
 	}
