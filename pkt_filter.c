@@ -145,7 +145,10 @@ void read_packet(u_char *args, const struct pcap_pkthdr *header, const u_char *p
 
 	// determine Link Layer type
 	switch(datalink){
-		//case LINKTYPE_ETHERNET:
+		case DLT_NULL:
+			printf("lo\n");
+			break;
+
 		case DLT_EN10MB:
 			eth = (Ethernet *) packet;
 			eth_ntohs(eth);
@@ -157,9 +160,8 @@ void read_packet(u_char *args, const struct pcap_pkthdr *header, const u_char *p
 				printf("Unknown protocol in Internet Layer, please use IPv4 instead\n");
 				goto end;
 			}
-			break;
 
-		case DLT_NULL:
+			ip = (IP *) (packet + SIZE_ETHERNET);
 			break;
 
 		default:
@@ -167,7 +169,6 @@ void read_packet(u_char *args, const struct pcap_pkthdr *header, const u_char *p
 			goto end;
 	}
 
-	ip = (IP *) (packet + SIZE_ETHERNET);
 	size_ip = get_ip_hdr_len(ip) << 2; // multiple 4 to get the total bytes since it is 4-byte words
 	if(size_ip < 20){
 		fprintf(stderr, "Invalid IP header length: %u bytes\n", size_ip);
@@ -396,7 +397,7 @@ pcap_t *get_handle_by_dev(const char *dev, bpf_u_int32 *net, bpf_u_int32 *mask){
 	// default select any available interface but not loopback interface
 	dev_ptr = tmp;
 	while(dev_ptr){
-		if((dev_ptr->flags & PCAP_IF_RUNNING) && !(dev_ptr->flags & PCAP_IF_LOOPBACK)){
+		if((dev_ptr->flags & PCAP_IF_RUNNING)){
 		    strcpy(dev, dev_ptr->name);
 
 		    ret = pcap_lookupnet(dev_ptr->name, net, mask, err_buf);
