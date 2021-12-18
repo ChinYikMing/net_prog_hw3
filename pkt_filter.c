@@ -394,7 +394,7 @@ pcap_t *get_handle_by_dev(const char *dev, bpf_u_int32 *net, bpf_u_int32 *mask){
 		dev_ptr = dev_ptr->next;
 	}
 
-	// default select any available interface but not loopback interface
+	// default select any available interface
 	dev_ptr = tmp;
 	while(dev_ptr){
 		if((dev_ptr->flags & PCAP_IF_RUNNING)){
@@ -719,24 +719,9 @@ void dns_label2str(u_char **label, u_char *start){
 		if(label_len & 0xC0){ // pointer
 			if(!tmp){
 				tmp = *label_pptr + 2; 
-				/*
-				printf("tmp_one: %x\n", *tmp);
-				printf("tmp_two: %x\n", *(tmp + 1));
-				printf("tmp_three: %x\n", *(tmp + 2));
-				printf("tmp_four: %x\n", *(tmp + 3));
-				*/
 			}
 			offset = ((*label_ptr) & 0x3F) | *(label_ptr + 1);
-			//printf("offset: %u", offset);
 			label_ptr = start + offset;
-			/*
-			printf("one: %x\n", *label_ptr);
-			printf("two: %x\n", *(label_ptr + 1));
-			printf("three: %x\n", *(label_ptr + 2));
-			printf("four: %x\n", *(label_ptr + 3));
-			printf("five: %x\n", *(label_ptr + 4));
-			printf("sive: %x\n", *(label_ptr + 5));
-			*/
 			goto next;
 		} else {              // octet length
 			label_ptr++;
