@@ -19,6 +19,26 @@ typedef struct ethernet {
 }
 void eth_info_print(Ethernet *eth);
 
+#define ARP_REQ 0x01
+#define ARP_REPLY 0x02
+typedef struct arp {
+	u_short hw;
+	u_short proto;
+	u_char hw_size;
+	u_char proto_size;
+	u_short opcode;
+	u_char send_mac[MAC_ADDR_LEN];
+	struct in_addr send_ip;
+	u_char tgt_mac[MAC_ADDR_LEN];
+	struct in_addr tgt_ip;
+} ARP;
+#define arp_ntohs(arp){ \
+	__ntohs(arp, hw); \
+	__ntohs(arp, proto); \
+	__ntohs(arp, opcode); \
+}
+void arp_handler(ARP *arp);
+
 typedef struct ip {
 	u_char vhl; 
 	u_char tos;

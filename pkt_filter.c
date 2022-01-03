@@ -133,6 +133,7 @@ void write_packet(u_char *dumper, const struct pcap_pkthdr *header, const u_char
 // simply ignore first argument since it is NULL
 void read_packet(u_char *args, const struct pcap_pkthdr *header, const u_char *packet){
 	Ethernet *eth;
+	ARP *arp;
 	IP *ip;
 	TCP *tcp;
 	UDP *udp;
@@ -156,12 +157,17 @@ void read_packet(u_char *args, const struct pcap_pkthdr *header, const u_char *p
 			// show MAC address (cmd("ip link") to check your interface MAC address) and type
 			eth_info_print(eth);
 
-			if(!(eth->type & ETHERTYPE_IP)){ // unsupported Internet Layer protocols
+			if(eth->type & ETHERTYPE_ARP){
+				arp = (ARP *) (packet + SIZE_ETHERNET);
+				arp_handler(arp);
+				goto end;
+			} else if(!(eth->type & ETHERTYPE_IP)){ // unsupported Internet Layer protocols
+				ip = (IP *) (packet + SIZE_ETHERNET);
+			} else {
 				printf("Unknown protocol in Internet Layer, please use IPv4 instead\n");
 				goto end;
 			}
 
-			ip = (IP *) (packet + SIZE_ETHERNET);
 			break;
 
 		default:
@@ -211,7 +217,8 @@ void read_packet(u_char *args, const struct pcap_pkthdr *header, const u_char *p
 	}
 
 end:
-	printf("=========================================================================================\n");
+	printf("========================================================================================="
+		"==================================================================================\n");
 	return;
 }
 
@@ -785,4 +792,70 @@ static void usage(const char *prog_name){
 		    "\"https://www.tcpdump.org/manpages/pcap-filter.7.html\"\n");
 
     err_exit(" Please try again!");
+}
+
+void arp_handler(ARP *arp){
+	arp_ntohs(arp);
+
+	printf("ARP (");
+	/*
+	printf("hardware type: ");
+	if(arp->hw & DLT_EN10MB)
+		printf("Ethernet, ");
+	else
+		printf("Unknown, ");
+
+	printf("protocol type: ");
+	if(arp->proto & ETHERTYPE_IP)
+		printf("IPv4, ");
+	else
+		printf("Unknown, ");
+
+	printf("hardware size: %u, ", arp->hw_size);
+	printf("protocol size: %u, ", arp->proto_size);
+	*/
+
+	printf("opcode: ");
+	if(arp->opcode & ARP_REQ)
+		printf("request, ");
+	else if(arp->opcode & ARP_REPLY)
+		printf("reply, ");
+	else
+		printf("invalid opcode, ");
+
+	char send_buf[INET_ADDRSTRLEN];
+	char tgt_buf[INET_ADDRSTRLEN];
+	const char *send_ip;
+	const char *tgt_ip;
+	send_ip = inet_ntop(AF_INET, (void *) &arp->send_ip, send_buf, INET_ADDRSTRLEN);
+	tgt_ip = inet_ntop(AF_INET, (void *) &arp->tgt_ip, tgt_buf, INET_ADDRSTRLEN);
+	u_char *ptr = arp->send_mac;
+	u_char tmp;
+	printf("sender MAC address: ");
+	for(size_t i = 0; i < MAC_ADDR_LEN; ++i){
+		memcpy(&tmp, ptr, sizeof(u_char));
+		if(tmp < 0xf) // we need to fill zero before the hex
+			printf("0");
+		if(MAC_ADDR_LEN - 1 == i){
+			printf("%X", *ptr);
+			break;
+		}
+		printf("%X.", *ptr);
+		ptr++;
+	}
+	printf(", sender IP address: %s", send_ip);
+	printf(", target MAC address: ");
+	ptr = arp->tgt_mac;
+	for(size_t i = 0; i < MAC_ADDR_LEN; ++i){
+		memcpy(&tmp, ptr, sizeof(u_char));
+		if(tmp < 0xf) // we need to fill zero before the hex
+			printf("0");
+		if(MAC_ADDR_LEN - 1 == i){
+			printf("%X", *ptr);
+			break;
+		}
+		printf("%X.", *ptr);
+		ptr++;
+	}
+	printf(", target IP address: %s)\n", tgt_ip);
 }
