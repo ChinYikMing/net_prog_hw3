@@ -9,8 +9,8 @@
 
 Features:
 1. supported protocols:
-   - Application Layer: rfc1035 DNS query, RR format(except experimental, obsolete specifications, and WKS RDATA format)
+   - Application Layer: rfc1035 DNS query, RR format(except experimental or obsolete specifications, WKS RDATA format, and additional records)
    - Transport   Layer：TCP and UDP
-   - Internet    Layer: IPv4
+   - Internet    Layer: IPv4, ARP
    - Link        Layer: Ethernet and Loopback
 2. multiple options, please refer to the program usage
