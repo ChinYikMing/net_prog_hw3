@@ -288,7 +288,7 @@ void eth_info_print(Ethernet *eth){
 	}
 
 	printf("type: ");
-	if(eth->type & ETHERTYPE_IP)
+	if(eth->type == ETHERTYPE_IP)
 		printf("IPv4");
 	else
 		printf("Unknown");
