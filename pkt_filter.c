@@ -157,11 +157,11 @@ void read_packet(u_char *args, const struct pcap_pkthdr *header, const u_char *p
 			// show MAC address (cmd("ip link") to check your interface MAC address) and type
 			eth_info_print(eth);
 
-			if(eth->type & ETHERTYPE_ARP){
+			if(eth->type == ETHERTYPE_ARP){
 				arp = (ARP *) (packet + SIZE_ETHERNET);
 				arp_handler(arp);
 				goto end;
-			} else if(!(eth->type & ETHERTYPE_IP)){ // unsupported Internet Layer protocols
+			} else if(eth->type == ETHERTYPE_IP){ // unsupported Internet Layer protocols
 				ip = (IP *) (packet + SIZE_ETHERNET);
 			} else {
 				printf("Unknown protocol in Internet Layer, please use IPv4 instead\n");
@@ -448,7 +448,7 @@ void dns_handler(DNS *dns){
 	printf("rcode: %x\n", get_dns_rcode(dns));
 	*/
 
-	printf("DNS(");
+	printf("DNS (");
 	printf("ID: %u, Flags: %x, Questions: %u, Answers: %u, Authority RRs: %u, Additional RRs: %u)\n",
 			id, flags, qd_cnt, an_cnt, ns_cnt, ar_cnt);
 	
@@ -768,7 +768,7 @@ void sig_handler(int signum){
 	putc('\n', stdout);
 	if(pcap_stats(handle, &stat) < 0)
 		err_exit(pcap_geterr(handle));
-	printf("%d packets recerved by filter\n", stat.ps_recv);
+	printf("%d packets received by filter\n", stat.ps_recv);
 	printf("%d packets dropped by kernel\n", stat.ps_drop);
 
 	exit(0);
